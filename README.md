@@ -1,8 +1,8 @@
 # md2confluence-mcp
 
-> **Fork** of [Gyeom/md2confluence-mcp](https://github.com/Gyeom/md2confluence-mcp) — changes: local Mermaid rendering via `@mermaid-js/mermaid-cli` (replaces kroki.io dependency).
+> **Fork** of [Gyeom/md2confluence-mcp](https://github.com/Gyeom/md2confluence-mcp) — changes: local Mermaid rendering via `@mermaid-js/mermaid-cli` and local PlantUML rendering.
 
-**Markdown to Confluence converter** — MCP server that uploads Markdown files to Atlassian Confluence with auto-converted Mermaid diagrams, code blocks, and images.
+**Markdown to Confluence converter** — MCP server that uploads Markdown files to Atlassian Confluence with auto-converted Mermaid/PlantUML diagrams, code blocks, and images.
 
 [![npm](https://img.shields.io/npm/v/md2confluence-mcp)](https://www.npmjs.com/package/md2confluence-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -19,7 +19,8 @@
 
 ## Features
 
-- ✅ **Mermaid diagrams** → PNG (auto-converted via kroki.io)
+- ✅ **Mermaid diagrams** → PNG (auto-converted locally via `mmdc`)
+- ✅ **PlantUML diagrams** → PNG (auto-converted locally via `plantuml.jar` or `plantuml`)
 - ✅ **Code blocks** → Confluence Code macro
 - ✅ **Images** → Attachments (auto-uploaded)
 - ✅ **Tables, links, formatting** → Preserved
@@ -160,14 +161,14 @@ https://company.atlassian.net/wiki/spaces/~712020.../overview
 ```mermaid
 flowchart LR
     A["Markdown"] --> B["Parse"]
-    B --> C["Mermaid → kroki.io → PNG"]
+    B --> C["Mermaid/PlantUML → local PNG"]
     C --> D["Convert to Confluence HTML"]
     D --> E["Upload via REST API"]
     E --> F["Attach images"]
 ```
 
 1. **Parse** - Extract content, remove front matter
-2. **Render** - Convert Mermaid diagrams to PNG via [kroki.io](https://kroki.io)
+2. **Render** - Convert Mermaid and PlantUML diagrams to PNG locally
 3. **Convert** - Transform Markdown to Confluence storage format
 4. **Upload** - Create/update page via Confluence REST API
 5. **Attach** - Upload images as page attachments
@@ -179,6 +180,7 @@ flowchart LR
 | `CONFLUENCE_URL` | ✅ | e.g., `https://your-domain.atlassian.net/wiki` |
 | `CONFLUENCE_EMAIL` | ✅ | Your Atlassian account email |
 | `CONFLUENCE_TOKEN` | ✅ | API token |
+| `PLANTUML_JAR` | No | Optional path to `plantuml.jar`; falls back to bundled/common paths or `plantuml` CLI |
 
 ## Development
 

@@ -2,11 +2,12 @@
  * Markdown to Confluence converter
  * - Converts Markdown to Confluence storage format
  * - Renders Mermaid diagrams to PNG via @mermaid-js/mermaid-cli (local)
+ * - Renders PlantUML diagrams to PNG via plantuml.jar (local)
  */
 
 import { marked } from "marked";
 import { createHash } from "crypto";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 import { tmpdir } from "os";
@@ -35,7 +36,7 @@ async function renderMermaidToPng(code: string): Promise<Buffer> {
   try {
     writeFileSync(inputFile, code, "utf8");
 
-    // Find mmdc — prefer local node_modules, fall back to global
+    // Find mmdc: prefer local node_modules, fall back to global
     const pkgRoot = new URL("../", import.meta.url).pathname;
     const mmdcPaths = [
       join(pkgRoot, "node_modules/.bin/mmdc"),
@@ -47,7 +48,7 @@ async function renderMermaidToPng(code: string): Promise<Buffer> {
       if (existsSync(p)) { mmdc = p; break; }
     }
 
-    // puppeteer config — disable sandbox for Linux environments
+    // Puppeteer config: disable sandbox for Linux environments
     const puppeteerConfig = join(pkgRoot, "puppeteer-config.json");
     const extraArgs = existsSync(puppeteerConfig)
       ? ["--puppeteerConfigFile", puppeteerConfig]
@@ -70,11 +71,65 @@ async function renderMermaidToPng(code: string): Promise<Buffer> {
 }
 
 /**
+ * Render PlantUML diagram to PNG using local plantuml.jar
+ */
+async function renderPlantUMLToPng(code: string): Promise<Buffer> {
+  // Ensure @startuml/@enduml wrapper
+  const uml = code.trim().startsWith("@startuml")
+    ? code
+    : `@startuml\n${code}\n@enduml`;
+
+  // Find plantuml.jar: check env, package root, and common system locations.
+  const pkgRoot = new URL("../", import.meta.url).pathname;
+  const jarPaths = [
+    process.env.PLANTUML_JAR,
+    join(pkgRoot, "plantuml.jar"),
+    "/home/rules/.local/bin/plantuml.jar",
+    "/usr/share/plantuml/plantuml.jar",
+    "/usr/local/lib/plantuml.jar",
+  ].filter((path): path is string => Boolean(path));
+  const jar = jarPaths.find(existsSync);
+  const command = jar ? "java" : "plantuml";
+  const args = jar ? ["-jar", jar, "-pipe", "-tpng"] : ["-pipe", "-tpng"];
+
+  return new Promise<Buffer>((resolve, reject) => {
+    const proc = spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    const timer = setTimeout(() => {
+      proc.kill("SIGTERM");
+      reject(new Error("PlantUML render timed out"));
+    }, 30000);
+
+    proc.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    proc.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    proc.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      const data = Buffer.concat(stdout);
+      if (code === 0 && data.length > 0) {
+        resolve(data);
+        return;
+      }
+      const message = Buffer.concat(stderr).toString("utf8").trim();
+      reject(new Error(message || `PlantUML exited with code ${code}`));
+    });
+
+    proc.stdin.end(uml);
+  });
+}
+
+/**
  * Generate filename from content hash
  */
-function generateFilename(content: string): string {
+function generateFilename(prefix: string, content: string): string {
   const hash = createHash("md5").update(content).digest("hex").slice(0, 12);
-  return `mermaid-${hash}.png`;
+  return `${prefix}-${hash}.png`;
 }
 
 /**
@@ -84,33 +139,40 @@ export async function convertMarkdownToConfluence(
   markdown: string
 ): Promise<ConversionResult> {
   const attachments: Attachment[] = [];
-  const mermaidBlocks: Map<string, string> = new Map();
+  const diagramBlocks: Map<string, string> = new Map();
+  let processedMarkdown = markdown;
 
   // Extract and process Mermaid blocks
   const mermaidRegex = /```mermaid\n([\s\S]*?)```/g;
   let match;
-  let processedMarkdown = markdown;
-
   while ((match = mermaidRegex.exec(markdown)) !== null) {
-    const mermaidCode = match[1].trim();
-    const filename = generateFilename(mermaidCode);
-
-    // Render to PNG
+    const code = match[1].trim();
+    const filename = generateFilename("mermaid", code);
     try {
-      const pngData = await renderMermaidToPng(mermaidCode);
+      const pngData = await renderMermaidToPng(code);
       attachments.push({ filename, data: pngData });
-
-      // Replace with Confluence image macro
-      const placeholder = `![mermaid-${filename}](${filename})`;
-      mermaidBlocks.set(match[0], placeholder);
+      diagramBlocks.set(match[0], `![${filename}](${filename})`);
     } catch (error) {
       console.error(`Failed to render Mermaid diagram: ${error}`);
-      // Keep original code block on error
     }
   }
 
-  // Replace Mermaid blocks with image placeholders
-  for (const [original, replacement] of mermaidBlocks) {
+  // Extract and process PlantUML blocks
+  const plantumlRegex = /```plantuml\n([\s\S]*?)```/g;
+  while ((match = plantumlRegex.exec(markdown)) !== null) {
+    const code = match[1].trim();
+    const filename = generateFilename("plantuml", code);
+    try {
+      const pngData = await renderPlantUMLToPng(code);
+      attachments.push({ filename, data: pngData });
+      diagramBlocks.set(match[0], `![${filename}](${filename})`);
+    } catch (error) {
+      console.error(`Failed to render PlantUML diagram: ${error}`);
+    }
+  }
+
+  // Replace diagram blocks with image placeholders
+  for (const [original, replacement] of diagramBlocks) {
     processedMarkdown = processedMarkdown.replace(original, replacement);
   }
 
@@ -135,8 +197,8 @@ export async function convertMarkdownToConfluence(
 
   // Images -> Confluence attachment or external image
   renderer.image = (href: string, title: string | null, text: string) => {
-    // Check if it's an attachment (Mermaid image)
-    if (href.endsWith(".png") && href.startsWith("mermaid-")) {
+    // Check if it's a diagram attachment (Mermaid or PlantUML)
+    if (href.endsWith(".png") && (href.startsWith("mermaid-") || href.startsWith("plantuml-"))) {
       return `<ac:image><ri:attachment ri:filename="${href}"/></ac:image>`;
     }
 
