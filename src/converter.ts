@@ -1,11 +1,18 @@
 /**
  * Markdown to Confluence converter
  * - Converts Markdown to Confluence storage format
- * - Renders Mermaid diagrams to PNG via kroki.io
+ * - Renders Mermaid diagrams to PNG via @mermaid-js/mermaid-cli (local)
  */
 
 import { marked } from "marked";
 import { createHash } from "crypto";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+const execFileAsync = promisify(execFile);
 
 interface Attachment {
   filename: string;
@@ -18,21 +25,48 @@ interface ConversionResult {
 }
 
 /**
- * Render Mermaid diagram to PNG using kroki.io
+ * Render Mermaid diagram to PNG using local mmdc CLI
  */
 async function renderMermaidToPng(code: string): Promise<Buffer> {
-  const response = await fetch("https://kroki.io/mermaid/png", {
-    method: "POST",
-    headers: { "Content-Type": "text/plain" },
-    body: code,
-  });
+  const hash = createHash("md5").update(code).digest("hex").slice(0, 8);
+  const inputFile = join(tmpdir(), `mermaid-${hash}.mmd`);
+  const outputFile = join(tmpdir(), `mermaid-${hash}.png`);
 
-  if (!response.ok) {
-    throw new Error(`Kroki API error: ${response.status}`);
+  try {
+    writeFileSync(inputFile, code, "utf8");
+
+    // Find mmdc — prefer local node_modules, fall back to global
+    const pkgRoot = new URL("../", import.meta.url).pathname;
+    const mmdcPaths = [
+      join(pkgRoot, "node_modules/.bin/mmdc"),
+      join(process.cwd(), "node_modules/.bin/mmdc"),
+      "mmdc",
+    ];
+    let mmdc = "mmdc";
+    for (const p of mmdcPaths) {
+      if (existsSync(p)) { mmdc = p; break; }
+    }
+
+    // puppeteer config — disable sandbox for Linux environments
+    const puppeteerConfig = join(pkgRoot, "puppeteer-config.json");
+    const extraArgs = existsSync(puppeteerConfig)
+      ? ["--puppeteerConfigFile", puppeteerConfig]
+      : [];
+
+    await execFileAsync(mmdc, [
+      "-i", inputFile,
+      "-o", outputFile,
+      "-b", "transparent",
+      "--quiet",
+      ...extraArgs,
+    ], { timeout: 30000 });
+
+    const data = readFileSync(outputFile);
+    return data;
+  } finally {
+    if (existsSync(inputFile)) unlinkSync(inputFile);
+    if (existsSync(outputFile)) unlinkSync(outputFile);
   }
-
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
 }
 
 /**

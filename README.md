@@ -1,5 +1,7 @@
 # md2confluence-mcp
 
+> **Fork** of [Gyeom/md2confluence-mcp](https://github.com/Gyeom/md2confluence-mcp) — changes: local Mermaid rendering via `@mermaid-js/mermaid-cli` (replaces kroki.io dependency).
+
 **Markdown to Confluence converter** — MCP server that uploads Markdown files to Atlassian Confluence with auto-converted Mermaid diagrams, code blocks, and images.
 
 [![npm](https://img.shields.io/npm/v/md2confluence-mcp)](https://www.npmjs.com/package/md2confluence-mcp)
